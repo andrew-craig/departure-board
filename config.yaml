@@ -1,0 +1,30 @@
+# Predefined trips for the departure board.
+# Each trip appears as a tab on the page.
+#
+# Structure:
+#   trip > departure_stops > [transfer] > final_arrival_stop
+#
+# Times (transfer_time, walk_time) are in seconds.
+
+trips:
+  - name: "To Work"
+    departure_stops:
+      - stop_id: "200060"
+        stop_name: "Home Station"
+      - stop_id: "200070"
+        stop_name: "Nearby Station"
+    transfer:
+      arrival_stop_id: "200010"
+      transfer_time: 300
+      departure_stop_id: "200015"
+    final_arrival_stop:
+      stop_id: "200020"
+      walk_time: 600
+
+  - name: "To Home"
+    departure_stops:
+      - stop_id: "200020"
+        stop_name: "Work Station"
+    final_arrival_stop:
+      stop_id: "200060"
+      walk_time: 120
