@@ -462,22 +462,26 @@ var boardTemplate = strings.TrimSpace(`
 <meta http-equiv="refresh" content="30">
 <title>Departure Board</title>
 <style>
+:root{--accent-color: #115e59;--bg-color: #f0fdfa; --text-color: rgb(2, 24, 23)}
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#1a1a2e;color:#eee;min-height:100vh}
-.hdr{background:#16213e;padding:12px 16px;display:flex;gap:16px;align-items:center}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg-color);color:var(--accent-color);min-height:100vh}
+.topbar{background:#16213e;padding-left:16px;padding-right:16px;display:flex;align-items:center;}
+.hdr{justify-content:space-between;padding-top:16px;padding-bottom:16px}
 .hdr h1{font-size:16px;font-weight:600}
 .hdr .time{font-size:13px;opacity:.7}
-.tabs{display:flex;background:#16213e;overflow-x:auto;-webkit-overflow-scrolling:touch;flex-grow:10;gap:16px;}
+.tabs{gap:16px;justify-content:flex-start;overflow-x:auto;padding-top:0;padding-bottom:2px}
 .tab{padding:10px 0px;font-size:14px;font-weight:500;color:#aaa;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;white-space:nowrap;user-select:none}
-.tab.active{color:#e94560;border-bottom-color:#e94560}
+.tab.active{color:var(--accent-color);border-bottom-color:var(--accent-color)}
 .trip{display:none}
 .trip.active{display:block}
 .dep{border-bottom:1px solid rgba(255,255,255,.08)}
-.dep-row{display:flex;align-items:center;padding:12px 16px;gap:12px}
+.dep-row{display:flex;align-items:flex-start;padding:12px 16px;gap:12px}
 .route{background:#0f3460;color:#e94560;font-weight:700;font-size:14px;padding:4px 8px;border-radius:4px;min-width:44px;text-align:center;flex-shrink:0}
 .route.second{background:#0a2a4a;color:#4ecca3}
-.info{flex:1;display:flex;flex-direction:row;align-items:center;gap:8px;min-width:0}
-.headsign{font-size:15px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.info{flex:1;display:flex;flex-direction:column;align-items:center;gap:8px;min-width:0}
+.info-top{display:flex;gap:8px;align-items:center;width:100%}
+.info-bottom{display:flex;gap:8px;align-items:center;width:100%}
+.route-details{font-size:13px;font-weight:400;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sched{font-size:12px;opacity:.6;margin-top:2px}
 .sched .delay{color:#ff6b6b;opacity:1}
 .times{text-align:right;flex-shrink:0,min-width:60px}
@@ -491,24 +495,23 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 </style>
 </head>
 <body>
-{{if .Error}}
-  <div class="hdr">
+  <div class="topbar hdr">
     <h1>Departure Board</h1>
   	<span class="time">{{.Now.Format "15:04"}}</span>
   </div>
+
+  {{if .Error}} 
   <div class="err">
     {{.Error}}
   </div>
-{{else}}
-  <div class="hdr">
-    <h1>Departure Board</h1>
-	<div class="tabs">
-  		{{range $i, $t := .Trips}}
-  		<div class="tab{{if eq $i 0}} active{{end}}" onclick="switchTab({{$i}})">{{$t.Name}}</div>
-  		{{end}}
-	</div>
-  	<span class="time">{{.Now.Format "15:04"}}</span>
+  {{else}}
+
+  <div class="topbar tabs">
+  	{{range $i, $t := .Trips}}
+  	<div class="tab{{if eq $i 0}} active{{end}}" onclick="switchTab({{$i}})">{{$t.Name}}</div>
+  	{{end}}
   </div>
+  
 
 {{range $i, $t := .Trips}}
 <div class="trip{{if eq $i 0}} active{{end}}" id="trip-{{$i}}">
@@ -519,11 +522,16 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
     <div class="dep">
     	<div class="dep-row">
     		<div class="info">
-	        	<div class="headsign">{{.DepartureName}}</div>
-				<div class="route">{{.RouteShortName}}</div>
-				{{if .TransferName}}<div class="headsign">{{.TransferName}}</div>{{end}}
-				{{if .SecondLegRouteShort}}<div class="route">{{.SecondLegRouteShort}}</div>{{end}}
-				<div class="headsign">{{.ArrivalName}}</div>
+				<div class="info-top">
+					<div class="route">{{.RouteShortName}}</div>
+					{{if .SecondLegRouteShort}}<div class="route">{{.SecondLegRouteShort}}</div>{{end}}
+				</div>
+				<div class="info-bottom">
+	        		<div class="route-details">{{.DepartureName}} →
+					{{if .TransferName}}{{.TransferName}} →{{end}}
+					{{.ArrivalName}}
+					</div>
+				</div>
         	</div>
         	<div class="times">
           		<div class="lbl">Departs</div>
