@@ -15,16 +15,16 @@ func TestLoadConfig(t *testing.T) {
 	yaml := `
 trips:
   - name: "Test Trip"
-    departure_stops:
-      - stop_id: "100"
-        stop_name: "Stop A"
-    transfer:
-      arrival_stop_id: "200"
-      transfer_time: 120
-      departure_stop_id: "201"
-    final_arrival_stop:
-      stop_id: "300"
-      walk_time: 60
+    routes:
+      - departure_stop_id: "100"
+        departure_name: "Start"
+        transfer_arrival_stop_id: "200"
+        transfer_time: 120
+        transfer_departure_stop_id: "201"
+        transfer_name: "Mid"
+        final_arrival_stop: "300"
+        final_walk_time: 60
+        arrival_name: "End"
 `
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	os.WriteFile(path, []byte(yaml), 0644)
@@ -39,11 +39,11 @@ trips:
 	if cfg.Trips[0].Name != "Test Trip" {
 		t.Errorf("expected trip name 'Test Trip', got %q", cfg.Trips[0].Name)
 	}
-	if cfg.Trips[0].Transfer == nil {
-		t.Fatal("expected transfer to be set")
+	if len(cfg.Trips[0].Routes) != 1 {
+		t.Fatalf("expected 1 route, got %d", len(cfg.Trips[0].Routes))
 	}
-	if cfg.Trips[0].Transfer.TransferTime != 120 {
-		t.Errorf("expected transfer time 120, got %d", cfg.Trips[0].Transfer.TransferTime)
+	if cfg.Trips[0].Routes[0].TransferTime != 120 {
+		t.Errorf("expected transfer time 120, got %d", cfg.Trips[0].Routes[0].TransferTime)
 	}
 }
 
@@ -79,13 +79,17 @@ func TestToDepartureView(t *testing.T) {
 		DelaySeconds:       &delay,
 	}
 
-	view := toDepartureView(d, now)
+	route := RouteConfig{DepartureName: "Start", TransferName: "Mid", ArrivalName: "End"}
+	view := toDepartureView(d, route, now)
 
 	if view.RouteShortName != "T1" {
 		t.Errorf("expected route T1, got %s", view.RouteShortName)
 	}
 	if view.Headsign != "Hornsby" {
 		t.Errorf("expected headsign Hornsby, got %s", view.Headsign)
+	}
+	if view.DepartureName != "Start" || view.TransferName != "Mid" || view.ArrivalName != "End" {
+		t.Errorf("expected names Start/Mid/End, got %s/%s/%s", view.DepartureName, view.TransferName, view.ArrivalName)
 	}
 	if !view.IsRealtime {
 		t.Error("expected IsRealtime true")
@@ -111,7 +115,8 @@ func TestToDepartureView_Now(t *testing.T) {
 		ScheduledDeparture: past,
 	}
 
-	view := toDepartureView(d, now)
+	route := RouteConfig{DepartureName: "A", ArrivalName: "B"}
+	view := toDepartureView(d, route, now)
 	if view.MinutesAway != "Now" {
 		t.Errorf("expected 'Now', got %s", view.MinutesAway)
 	}
@@ -167,8 +172,8 @@ func TestFindConnection(t *testing.T) {
 		t.Fatal("expected to find connection")
 	}
 	expected := now.Add(35 * time.Minute)
-	if !conn.Truncate(time.Second).Equal(expected.Truncate(time.Second)) {
-		t.Errorf("expected arrival at %v, got %v", expected, *conn)
+	if !conn.ArrivalTime.Truncate(time.Second).Equal(expected.Truncate(time.Second)) {
+		t.Errorf("expected arrival at %v, got %v", expected, conn.ArrivalTime)
 	}
 
 	// No connection available
@@ -273,9 +278,14 @@ func TestHandler_DirectTrip(t *testing.T) {
 	cfg := Config{
 		Trips: []TripConfig{
 			{
-				Name:             "Direct",
-				DepartureStops:   []StopConfig{{StopID: "100", StopName: "Start"}},
-				FinalArrivalStop: FinalStopConfig{StopID: "300", WalkTime: 120},
+				Name: "Direct",
+				Routes: []RouteConfig{{
+					DepartureStopID: "100",
+					DepartureName:   "Start",
+					FinalArrivalStop: "300",
+					FinalWalkTime:   120,
+					ArrivalName:     "End",
+				}},
 			},
 		},
 	}
@@ -294,14 +304,11 @@ func TestHandler_DirectTrip(t *testing.T) {
 	if !strings.Contains(body, "T1") {
 		t.Error("expected T1 in response")
 	}
-	if !strings.Contains(body, "City") {
-		t.Error("expected headsign City in response")
+	if !strings.Contains(body, "Start") || !strings.Contains(body, "End") {
+		t.Error("expected departure/arrival names in response")
 	}
 	if !strings.Contains(body, "Direct") {
 		t.Error("expected trip name Direct in response")
-	}
-	if !strings.Contains(body, "Start") {
-		t.Error("expected stop name Start in response")
 	}
 	// Should have a connection (direct arrival + 120s walk)
 	if strings.Contains(body, "No connection") {
@@ -345,14 +352,18 @@ func TestHandler_TransferTrip(t *testing.T) {
 	cfg := Config{
 		Trips: []TripConfig{
 			{
-				Name:           "With Transfer",
-				DepartureStops: []StopConfig{{StopID: "100", StopName: "Origin"}},
-				Transfer: &TransferConfig{
-					ArrivalStopID:   "200",
-					TransferTime:    300, // 5 minutes
-					DepartureStopID: "201",
-				},
-				FinalArrivalStop: FinalStopConfig{StopID: "300", WalkTime: 60},
+				Name: "With Transfer",
+				Routes: []RouteConfig{{
+					DepartureStopID:         "100",
+					DepartureName:           "Origin",
+					TransferArrivalStopID:   "200",
+					TransferTime:            300, // 5 minutes
+					TransferDepartureStopID: "201",
+					TransferName:            "Transfer",
+					FinalArrivalStop:        "300",
+					FinalWalkTime:           60,
+					ArrivalName:             "Dest",
+				}},
 			},
 		},
 	}
@@ -402,9 +413,14 @@ func TestHandler_NoConnection(t *testing.T) {
 	cfg := Config{
 		Trips: []TripConfig{
 			{
-				Name:             "No Conn",
-				DepartureStops:   []StopConfig{{StopID: "100", StopName: "Start"}},
-				FinalArrivalStop: FinalStopConfig{StopID: "300", WalkTime: 60},
+				Name: "No Conn",
+				Routes: []RouteConfig{{
+					DepartureStopID: "100",
+					DepartureName:   "Start",
+					FinalArrivalStop: "300",
+					FinalWalkTime:   60,
+					ArrivalName:     "End",
+				}},
 			},
 		},
 	}
@@ -417,8 +433,13 @@ func TestHandler_NoConnection(t *testing.T) {
 	handler(w, req)
 
 	body := w.Body.String()
-	if !strings.Contains(body, "No connection") {
-		t.Error("expected 'No connection' in response")
+	// Departures with no connection should not be shown
+	if strings.Contains(body, "T1") || strings.Contains(body, "Somewhere") {
+		t.Error("expected departure with no connection to be filtered out")
+	}
+	// Should show "No departures" message since all departures were filtered
+	if !strings.Contains(body, "No departures") {
+		t.Error("expected 'No departures' message when all connections filtered out")
 	}
 }
 
@@ -432,9 +453,14 @@ func TestHandler_APIError(t *testing.T) {
 	cfg := Config{
 		Trips: []TripConfig{
 			{
-				Name:             "Err Trip",
-				DepartureStops:   []StopConfig{{StopID: "100", StopName: "Start"}},
-				FinalArrivalStop: FinalStopConfig{StopID: "300", WalkTime: 60},
+				Name: "Err Trip",
+				Routes: []RouteConfig{{
+					DepartureStopID: "100",
+					DepartureName:   "Start",
+					FinalArrivalStop: "300",
+					FinalWalkTime:   60,
+					ArrivalName:     "End",
+				}},
 			},
 		},
 	}
@@ -456,9 +482,14 @@ func TestHandler_NotFound(t *testing.T) {
 	cfg := Config{
 		Trips: []TripConfig{
 			{
-				Name:             "Test",
-				DepartureStops:   []StopConfig{{StopID: "100", StopName: "Start"}},
-				FinalArrivalStop: FinalStopConfig{StopID: "300", WalkTime: 60},
+				Name: "Test",
+				Routes: []RouteConfig{{
+					DepartureStopID: "100",
+					DepartureName:   "Start",
+					FinalArrivalStop: "300",
+					FinalWalkTime:   60,
+					ArrivalName:     "End",
+				}},
 			},
 		},
 	}
@@ -507,14 +538,24 @@ func TestHandler_MultipleTabs(t *testing.T) {
 	cfg := Config{
 		Trips: []TripConfig{
 			{
-				Name:             "To Work",
-				DepartureStops:   []StopConfig{{StopID: "100", StopName: "Home"}},
-				FinalArrivalStop: FinalStopConfig{StopID: "300", WalkTime: 60},
+				Name: "To Work",
+				Routes: []RouteConfig{{
+					DepartureStopID: "100",
+					DepartureName:   "Home",
+					FinalArrivalStop: "300",
+					FinalWalkTime:   60,
+					ArrivalName:     "Work",
+				}},
 			},
 			{
-				Name:             "To Home",
-				DepartureStops:   []StopConfig{{StopID: "200", StopName: "Work"}},
-				FinalArrivalStop: FinalStopConfig{StopID: "100", WalkTime: 120},
+				Name: "To Home",
+				Routes: []RouteConfig{{
+					DepartureStopID: "200",
+					DepartureName:   "Work",
+					FinalArrivalStop: "100",
+					FinalWalkTime:   120,
+					ArrivalName:     "Home",
+				}},
 			},
 		},
 	}
@@ -538,5 +579,79 @@ func TestHandler_MultipleTabs(t *testing.T) {
 	}
 	if !strings.Contains(body, "T2") {
 		t.Error("expected T2 route")
+	}
+}
+
+func TestMatchesServices(t *testing.T) {
+	if !matchesServices("T1", nil) {
+		t.Error("nil allowed should match anything")
+	}
+	if !matchesServices("T1", []string{}) {
+		t.Error("empty allowed should match anything")
+	}
+	if !matchesServices("T1", []string{"T1", "T2"}) {
+		t.Error("T1 should match [T1, T2]")
+	}
+	if matchesServices("T3", []string{"T1", "T2"}) {
+		t.Error("T3 should not match [T1, T2]")
+	}
+}
+
+func TestHandler_ServiceFilter(t *testing.T) {
+	now := time.Now().In(sydneyTZ)
+
+	responses := map[string][]Departure{
+		"100": {
+			{
+				RouteShortName:     "207",
+				Headsign:           "City via A",
+				ScheduledDeparture: now.Add(5 * time.Minute),
+				Arrivals: []ArrivalDetail{
+					{StopID: "300", StopName: "Final", ScheduledArrival: now.Add(30 * time.Minute)},
+				},
+			},
+			{
+				RouteShortName:     "333",
+				Headsign:           "City via B",
+				ScheduledDeparture: now.Add(8 * time.Minute),
+				Arrivals: []ArrivalDetail{
+					{StopID: "300", StopName: "Final", ScheduledArrival: now.Add(35 * time.Minute)},
+				},
+			},
+		},
+	}
+
+	mock := newMockAPI(t, responses)
+	defer mock.Close()
+
+	cfg := Config{
+		Trips: []TripConfig{
+			{
+				Name: "Filtered",
+				Routes: []RouteConfig{{
+					DepartureStopID:  "100",
+					DepartureName:    "Test",
+					Leg1Services:     []string{"207"},
+					FinalArrivalStop: "300",
+					FinalWalkTime:    60,
+					ArrivalName:      "End",
+				}},
+			},
+		},
+	}
+
+	tmpl := parseTemplate()
+	handler := buildHandler(tmpl, mock.URL, cfg)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "207") {
+		t.Error("expected 207 route in filtered results")
+	}
+	if strings.Contains(body, "333") {
+		t.Error("expected 333 to be filtered out")
 	}
 }

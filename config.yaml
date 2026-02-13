@@ -2,29 +2,96 @@
 # Each trip appears as a tab on the page.
 #
 # Structure:
-#   trip > departure_stops > [transfer] > final_arrival_stop
+#   trip > routes > [transfer] > final_arrival_stop
 #
-# Times (transfer_time, walk_time) are in seconds.
+# Times (transfer_time, final_walk_time) are in seconds.
+
+# GTFS Departure Service API base URL
+gtfs_api_url: "http://localhost:8092"
 
 trips:
-  - name: "To Work"
-    departure_stops:
-      - stop_id: "200060"
-        stop_name: "Home Station"
-      - stop_id: "200070"
-        stop_name: "Nearby Station"
-    transfer:
-      arrival_stop_id: "200010"
-      transfer_time: 300
-      departure_stop_id: "200015"
-    final_arrival_stop:
-      stop_id: "200020"
-      walk_time: 600
+  - name: "Home → Chippo"
+    routes:
+      - departure_stop_id: "206827"
+        departure_name: "Middle Cove"
+        leg_1_services: 
+        - "207"
+        - "208"
+        - "209"
+        transfer_arrival_stop_id: "2060116"
+        transfer_time: 270
+        transfer_departure_stop_id: "2060115"
+        transfer_name: "Victoria Cross"
+        final_arrival_stop: "2060115"
+        final_walk_time: 720
+        arrival_name: "Central"
+      - departure_stop_id: "206827"
+        departure_name: "Middle Cove"
+        transfer_arrival_stop_id: "200096"
+        transfer_time: 90
+        transfer_departure_stop_id: "2000453"
+        transfer_name: "City"
+        final_arrival_stop: "2000443"
+        final_walk_time: 720
+        arrival_name: "Chinatown"
+      - departure_stop_id: "206829"
+        departure_name: "Castle Crag (EVW)"
+        leg_1_services: 
+        - "260"
+        transfer_arrival_stop_id: "2060116"
+        transfer_time: 270
+        transfer_departure_stop_id: "2060115"
+        transfer_name: "Victoria Cross"
+        final_arrival_stop: "2060115"
+        final_walk_time: 720
+        arrival_name: "Central"
+      - departure_stop_id: "206841"
+        departure_name: "Castle Crag (Edinburgh Rd)"
+        transfer_arrival_stop_id: "2060116"
+        transfer_time: 270
+        transfer_departure_stop_id: "2060115"
+        transfer_name: "Victoria Cross"
+        final_arrival_stop: "2060115"
+        final_walk_time: 720
+        arrival_name: "Central"
 
-  - name: "To Home"
-    departure_stops:
-      - stop_id: "200020"
-        stop_name: "Work Station"
-    final_arrival_stop:
-      stop_id: "200060"
-      walk_time: 120
+  - name: "Chippo → Home"
+    routes:
+      - departure_stop_id: "2000466"
+        departure_name: "Central"
+        transfer_arrival_stop_id: "2060114"
+        transfer_time: 270
+        transfer_departure_stop_id: "206083"
+        transfer_name: "Victoria Cross"
+        final_arrival_stop: "206846"
+        final_walk_time: 240
+        arrival_name: "Middle Cove"
+      - departure_stop_id: "2000466"
+        departure_name: "Central"
+        transfer_arrival_stop_id: "2060114"
+        transfer_time: 270
+        transfer_departure_stop_id: "206083"
+        transfer_name: "Victoria Cross"
+        leg_2_services: 
+        - "260"
+        final_arrival_stop: "206844"
+        final_walk_time: 840
+        arrival_name: "Castle Crag"
+      - departure_stop_id: "2000466"
+        departure_name: "Central"
+        transfer_arrival_stop_id: "2060114"
+        transfer_time: 270
+        transfer_departure_stop_id: "206083"
+        transfer_name: "Victoria Cross"
+        final_arrival_stop: "22068305"
+        final_walk_time: 840
+        arrival_name: "Castle Crag"
+      - departure_stop_id: "2000444"
+        departure_name: "Chinatown"
+        transfer_arrival_stop_id: "2000452"
+        transfer_time: 30
+        transfer_departure_stop_id: "2000417"
+        transfer_name: "Bridge St"
+        final_arrival_stop: "206846"
+        final_walk_time: 720
+        arrival_name: "Middle Cove"

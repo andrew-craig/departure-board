@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,30 +18,28 @@ import (
 // Config types
 
 type Config struct {
-	Trips []TripConfig `yaml:"trips"`
+	GtfsAPIURL string       `yaml:"gtfs_api_url"`
+	Trips      []TripConfig `yaml:"trips"`
 }
 
 type TripConfig struct {
-	Name             string          `yaml:"name"`
-	DepartureStops   []StopConfig    `yaml:"departure_stops"`
-	Transfer         *TransferConfig `yaml:"transfer,omitempty"`
-	FinalArrivalStop FinalStopConfig `yaml:"final_arrival_stop"`
+	Name   string        `yaml:"name"`
+	Routes []RouteConfig `yaml:"routes"`
 }
 
-type StopConfig struct {
-	StopID   string `yaml:"stop_id"`
-	StopName string `yaml:"stop_name"`
-}
-
-type TransferConfig struct {
-	ArrivalStopID   string `yaml:"arrival_stop_id"`
-	TransferTime    int    `yaml:"transfer_time"`
-	DepartureStopID string `yaml:"departure_stop_id"`
-}
-
-type FinalStopConfig struct {
-	StopID   string `yaml:"stop_id"`
-	WalkTime int    `yaml:"walk_time"`
+type RouteConfig struct {
+	RouteName               string   `yaml:"route_name"`
+	DepartureStopID         string   `yaml:"departure_stop_id"`
+	DepartureName           string   `yaml:"departure_name"`
+	Leg1Services            []string `yaml:"leg_1_services,omitempty"`
+	TransferArrivalStopID   string   `yaml:"transfer_arrival_stop_id,omitempty"`
+	TransferTime            int      `yaml:"transfer_time,omitempty"`
+	TransferDepartureStopID string   `yaml:"transfer_departure_stop_id,omitempty"`
+	TransferName            string   `yaml:"transfer_name,omitempty"`
+	Leg2Services            []string `yaml:"leg_2_services,omitempty"`
+	FinalArrivalStop        string   `yaml:"final_arrival_stop"`
+	FinalWalkTime           int      `yaml:"final_walk_time"`
+	ArrivalName             string   `yaml:"arrival_name"`
 }
 
 // API types
@@ -65,34 +64,37 @@ type ArrivalDetail struct {
 
 // View types
 
+const departureWindowMinutes = 60
+
 type PageData struct {
-	Trips []TripView
-	Now   time.Time
-	Error string
+	Trips         []TripView
+	Now           time.Time
+	Error         string
+	WindowMinutes int
 }
 
 type TripView struct {
-	Name  string
-	Stops []StopView
-}
-
-type StopView struct {
-	StopID     string
-	StopName   string
+	Name       string
 	Departures []DepartureView
 }
 
 type DepartureView struct {
-	RouteShortName   string
-	Headsign         string
-	DepartureTime    string
-	MinutesAway      string
-	IsRealtime       bool
-	IsDelayed        bool
-	DelayMinutes     int
-	FinalArrivalTime string
-	FinalArrivalMins string
-	HasConnection    bool
+	RouteShortName      string
+	Headsign            string
+	DepartureTime       string
+	MinutesAway         string
+	IsRealtime          bool
+	IsDelayed           bool
+	DelayMinutes        int
+	FinalArrivalTime    string
+	FinalArrivalMins    string
+	HasConnection       bool
+	SecondLegRouteShort string
+	SecondLegHeadsign   string
+	DepartureName       string
+	TransferName        string
+	ArrivalName         string
+	finalArrivalSort    time.Time
 }
 
 var sydneyTZ *time.Location
@@ -110,15 +112,19 @@ func main() {
 	if port == "" {
 		port = "3000"
 	}
-	apiURL := os.Getenv("GTFS_API_URL")
-	if apiURL == "" {
-		apiURL = "http://localhost:8080"
-	}
 	configPath := "config.yaml"
 
 	cfg, err := loadConfig(configPath)
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
+	}
+
+	apiURL := cfg.GtfsAPIURL
+	if apiURL == "" {
+		apiURL = os.Getenv("GTFS_API_URL")
+		if apiURL == "" {
+			apiURL = "http://localhost:8080"
+		}
 	}
 
 	tmpl := parseTemplate()
@@ -155,7 +161,7 @@ func buildHandler(tmpl *template.Template, apiURL string, cfg Config) http.Handl
 		}
 
 		now := time.Now().In(sydneyTZ)
-		data := PageData{Now: now}
+		data := PageData{Now: now, WindowMinutes: departureWindowMinutes}
 
 		for _, trip := range cfg.Trips {
 			tv, err := buildTripView(r.Context(), apiURL, trip, now)
@@ -174,58 +180,96 @@ func buildHandler(tmpl *template.Template, apiURL string, cfg Config) http.Handl
 func buildTripView(ctx context.Context, apiURL string, trip TripConfig, now time.Time) (TripView, error) {
 	tv := TripView{Name: trip.Name}
 
-	var arrivalStopID string
-	if trip.Transfer != nil {
-		arrivalStopID = trip.Transfer.ArrivalStopID
-	} else {
-		arrivalStopID = trip.FinalArrivalStop.StopID
-	}
-
-	var transferDepartures []Departure
-	if trip.Transfer != nil {
-		var err error
-		transferDepartures, err = fetchDepartures(ctx, apiURL, trip.Transfer.DepartureStopID, trip.FinalArrivalStop.StopID)
+	for _, route := range trip.Routes {
+		deps, err := buildRouteDepartures(ctx, apiURL, route, now)
 		if err != nil {
-			return tv, fmt.Errorf("fetching transfer departures: %w", err)
+			return tv, fmt.Errorf("building route %q: %w", route.RouteName, err)
 		}
+		tv.Departures = append(tv.Departures, deps...)
 	}
 
-	for _, stop := range trip.DepartureStops {
-		departures, err := fetchDepartures(ctx, apiURL, stop.StopID, arrivalStopID)
-		if err != nil {
-			return tv, fmt.Errorf("fetching departures for stop %s: %w", stop.StopID, err)
-		}
-
-		sv := StopView{
-			StopID:   stop.StopID,
-			StopName: stop.StopName,
-		}
-
-		for _, d := range departures {
-			depTime := effectiveDeparture(d)
-			if depTime.Before(now) || depTime.After(now.Add(20*time.Minute)) {
-				continue
-			}
-
-			dv := toDepartureView(d, now)
-
-			if trip.Transfer != nil {
-				calcTransferArrival(&dv, d, trip, transferDepartures, now)
-			} else {
-				calcDirectArrival(&dv, d, trip, now)
-			}
-
-			sv.Departures = append(sv.Departures, dv)
-		}
-
-		tv.Stops = append(tv.Stops, sv)
-	}
+	sort.Slice(tv.Departures, func(i, j int) bool {
+		return tv.Departures[i].finalArrivalSort.Before(tv.Departures[j].finalArrivalSort)
+	})
 
 	return tv, nil
 }
 
-func calcTransferArrival(dv *DepartureView, d Departure, trip TripConfig, transferDepartures []Departure, now time.Time) {
-	transferArrival := findArrival(d, trip.Transfer.ArrivalStopID)
+func buildRouteDepartures(ctx context.Context, apiURL string, route RouteConfig, now time.Time) ([]DepartureView, error) {
+	hasTransfer := route.TransferArrivalStopID != ""
+
+	// Determine the arrival stop for the first-leg query
+	var firstLegArrivalStop string
+	if hasTransfer {
+		firstLegArrivalStop = route.TransferArrivalStopID
+	} else {
+		firstLegArrivalStop = route.FinalArrivalStop
+	}
+
+	departures, err := fetchDepartures(ctx, apiURL, route.DepartureStopID, firstLegArrivalStop)
+	if err != nil {
+		return nil, fmt.Errorf("fetching departures for stop %s: %w", route.DepartureStopID, err)
+	}
+
+	// Filter first-leg departures by allowed services
+	if len(route.Leg1Services) > 0 {
+		filtered := departures[:0]
+		for _, d := range departures {
+			if matchesServices(d.RouteShortName, route.Leg1Services) {
+				filtered = append(filtered, d)
+			}
+		}
+		departures = filtered
+	}
+
+	// If there's a transfer and the second leg requires transit (different stops),
+	// fetch departures for the connecting service
+	var transferDepartures []Departure
+	needsSecondLeg := hasTransfer && route.TransferDepartureStopID != route.FinalArrivalStop
+	if needsSecondLeg {
+		transferDepartures, err = fetchDepartures(ctx, apiURL, route.TransferDepartureStopID, route.FinalArrivalStop)
+		if err != nil {
+			return nil, fmt.Errorf("fetching transfer departures: %w", err)
+		}
+
+		// Filter second-leg departures by allowed services
+		if len(route.Leg2Services) > 0 {
+			filtered := transferDepartures[:0]
+			for _, d := range transferDepartures {
+				if matchesServices(d.RouteShortName, route.Leg2Services) {
+					filtered = append(filtered, d)
+				}
+			}
+			transferDepartures = filtered
+		}
+	}
+
+	var result []DepartureView
+	for _, d := range departures {
+		depTime := effectiveDeparture(d)
+		if depTime.Before(now) || depTime.After(now.Add(departureWindowMinutes*time.Minute)) {
+			continue
+		}
+
+		dv := toDepartureView(d, route, now)
+
+		if hasTransfer {
+			calcTransferArrival(&dv, d, route, transferDepartures, needsSecondLeg, now)
+		} else {
+			calcDirectArrival(&dv, d, route, now)
+		}
+
+		// Only show departures with valid connections
+		if dv.HasConnection {
+			result = append(result, dv)
+		}
+	}
+
+	return result, nil
+}
+
+func calcTransferArrival(dv *DepartureView, d Departure, route RouteConfig, transferDepartures []Departure, needsSecondLeg bool, now time.Time) {
+	transferArrival := findArrival(d, route.TransferArrivalStopID)
 	if transferArrival == nil {
 		dv.HasConnection = false
 		dv.FinalArrivalMins = "No connection"
@@ -233,23 +277,35 @@ func calcTransferArrival(dv *DepartureView, d Departure, trip TripConfig, transf
 	}
 
 	arrTime := effectiveArrival(*transferArrival)
-	earliestTransferDept := arrTime.Add(time.Duration(trip.Transfer.TransferTime) * time.Second)
 
-	connection := findConnection(transferDepartures, earliestTransferDept, trip.FinalArrivalStop.StopID)
-	if connection == nil {
-		dv.HasConnection = false
-		dv.FinalArrivalMins = "No connection"
-		return
+	if needsSecondLeg {
+		// Need a connecting service from transfer departure stop to final stop
+		earliestTransferDept := arrTime.Add(time.Duration(route.TransferTime) * time.Second)
+		connection := findConnection(transferDepartures, earliestTransferDept, route.FinalArrivalStop)
+		if connection == nil {
+			dv.HasConnection = false
+			dv.FinalArrivalMins = "No connection"
+			return
+		}
+		finalArr := connection.ArrivalTime.Add(time.Duration(route.FinalWalkTime) * time.Second)
+		dv.HasConnection = true
+		dv.FinalArrivalTime = finalArr.In(sydneyTZ).Format("15:04")
+		dv.FinalArrivalMins = formatMinsAway(finalArr, now)
+		dv.finalArrivalSort = finalArr
+		dv.SecondLegRouteShort = connection.RouteShortName
+		dv.SecondLegHeadsign = connection.Headsign
+	} else {
+		// Walk-only transfer: arrival at transfer stop + transfer walk + final walk
+		finalArr := arrTime.Add(time.Duration(route.TransferTime+route.FinalWalkTime) * time.Second)
+		dv.HasConnection = true
+		dv.FinalArrivalTime = finalArr.In(sydneyTZ).Format("15:04")
+		dv.FinalArrivalMins = formatMinsAway(finalArr, now)
+		dv.finalArrivalSort = finalArr
 	}
-
-	finalArr := connection.Add(time.Duration(trip.FinalArrivalStop.WalkTime) * time.Second)
-	dv.HasConnection = true
-	dv.FinalArrivalTime = finalArr.In(sydneyTZ).Format("15:04")
-	dv.FinalArrivalMins = formatMinsAway(finalArr, now)
 }
 
-func calcDirectArrival(dv *DepartureView, d Departure, trip TripConfig, now time.Time) {
-	finalArrival := findArrival(d, trip.FinalArrivalStop.StopID)
+func calcDirectArrival(dv *DepartureView, d Departure, route RouteConfig, now time.Time) {
+	finalArrival := findArrival(d, route.FinalArrivalStop)
 	if finalArrival == nil {
 		dv.HasConnection = false
 		dv.FinalArrivalMins = "No connection"
@@ -257,10 +313,11 @@ func calcDirectArrival(dv *DepartureView, d Departure, trip TripConfig, now time
 	}
 
 	arrTime := effectiveArrival(*finalArrival)
-	finalArr := arrTime.Add(time.Duration(trip.FinalArrivalStop.WalkTime) * time.Second)
+	finalArr := arrTime.Add(time.Duration(route.FinalWalkTime) * time.Second)
 	dv.HasConnection = true
 	dv.FinalArrivalTime = finalArr.In(sydneyTZ).Format("15:04")
 	dv.FinalArrivalMins = formatMinsAway(finalArr, now)
+	dv.finalArrivalSort = finalArr
 }
 
 func formatMinsAway(t time.Time, now time.Time) string {
@@ -298,7 +355,13 @@ func findArrival(d Departure, stopID string) *ArrivalDetail {
 	return nil
 }
 
-func findConnection(transferDepartures []Departure, earliestDept time.Time, finalStopID string) *time.Time {
+type ConnectionResult struct {
+	ArrivalTime    time.Time
+	RouteShortName string
+	Headsign       string
+}
+
+func findConnection(transferDepartures []Departure, earliestDept time.Time, finalStopID string) *ConnectionResult {
 	for _, td := range transferDepartures {
 		tdTime := effectiveDeparture(td)
 		if tdTime.Before(earliestDept) {
@@ -306,14 +369,29 @@ func findConnection(transferDepartures []Departure, earliestDept time.Time, fina
 		}
 		arr := findArrival(td, finalStopID)
 		if arr != nil {
-			t := effectiveArrival(*arr)
-			return &t
+			return &ConnectionResult{
+				ArrivalTime:    effectiveArrival(*arr),
+				RouteShortName: td.RouteShortName,
+				Headsign:       td.Headsign,
+			}
 		}
 	}
 	return nil
 }
 
-func toDepartureView(d Departure, now time.Time) DepartureView {
+func matchesServices(routeShortName string, allowed []string) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	for _, a := range allowed {
+		if a == routeShortName {
+			return true
+		}
+	}
+	return false
+}
+
+func toDepartureView(d Departure, route RouteConfig, now time.Time) DepartureView {
 	depTime := d.ScheduledDeparture
 	isRealtime := false
 	if d.RealtimeDeparture != nil {
@@ -336,6 +414,9 @@ func toDepartureView(d Departure, now time.Time) DepartureView {
 		IsRealtime:     isRealtime,
 		IsDelayed:      isDelayed,
 		DelayMinutes:   delayMins,
+		DepartureName:  route.DepartureName,
+		TransferName:   route.TransferName,
+		ArrivalName:    route.ArrivalName,
 	}
 }
 
@@ -383,26 +464,26 @@ var boardTemplate = strings.TrimSpace(`
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#1a1a2e;color:#eee;min-height:100vh}
-.hdr{background:#16213e;padding:12px 16px;display:flex;justify-content:space-between;align-items:center}
+.hdr{background:#16213e;padding:12px 16px;display:flex;gap:16px;align-items:center}
 .hdr h1{font-size:16px;font-weight:600}
 .hdr .time{font-size:13px;opacity:.7}
-.tabs{display:flex;background:#16213e;border-bottom:2px solid #0f3460;overflow-x:auto;-webkit-overflow-scrolling:touch}
-.tab{padding:10px 20px;font-size:14px;font-weight:500;color:#aaa;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;white-space:nowrap;user-select:none}
+.tabs{display:flex;background:#16213e;overflow-x:auto;-webkit-overflow-scrolling:touch;flex-grow:10;gap:16px;}
+.tab{padding:10px 0px;font-size:14px;font-weight:500;color:#aaa;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;white-space:nowrap;user-select:none}
 .tab.active{color:#e94560;border-bottom-color:#e94560}
 .trip{display:none}
 .trip.active{display:block}
-.stop-hdr{background:#16213e;padding:8px 16px;font-size:13px;font-weight:600;color:#4ecca3;border-bottom:1px solid rgba(255,255,255,.05)}
 .dep{border-bottom:1px solid rgba(255,255,255,.08)}
 .dep-row{display:flex;align-items:center;padding:12px 16px;gap:12px}
 .route{background:#0f3460;color:#e94560;font-weight:700;font-size:14px;padding:4px 8px;border-radius:4px;min-width:44px;text-align:center;flex-shrink:0}
-.info{flex:1;min-width:0}
+.route.second{background:#0a2a4a;color:#4ecca3}
+.info{flex:1;display:flex;flex-direction:row;align-items:center;gap:8px;min-width:0}
 .headsign{font-size:15px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sched{font-size:12px;opacity:.6;margin-top:2px}
 .sched .delay{color:#ff6b6b;opacity:1}
-.times{text-align:right;flex-shrink:0}
+.times{text-align:right;flex-shrink:0,min-width:60px}
 .times .depart{font-size:18px;font-weight:700;color:#e94560}
 .times .depart.rt{color:#4ecca3}
-.times .arrive{font-size:13px;color:#4ecca3;margin-top:2px}
+.times .arrive{font-size:18px;font-weight:700;color:#e94560}
 .times .arrive.no-conn{color:#ff6b6b}
 .times .lbl{font-size:10px;opacity:.5}
 .empty{padding:48px 16px;text-align:center;opacity:.5;font-size:14px}
@@ -410,49 +491,56 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 </style>
 </head>
 <body>
-<div class="hdr">
-  <h1>Departure Board</h1>
-  <span class="time">{{.Now.Format "15:04"}}</span>
-</div>
 {{if .Error}}
-  <div class="err">{{.Error}}</div>
+  <div class="hdr">
+    <h1>Departure Board</h1>
+  	<span class="time">{{.Now.Format "15:04"}}</span>
+  </div>
+  <div class="err">
+    {{.Error}}
+  </div>
 {{else}}
-<div class="tabs">
-  {{range $i, $t := .Trips}}
-  <div class="tab{{if eq $i 0}} active{{end}}" onclick="switchTab({{$i}})">{{$t.Name}}</div>
-  {{end}}
-</div>
+  <div class="hdr">
+    <h1>Departure Board</h1>
+	<div class="tabs">
+  		{{range $i, $t := .Trips}}
+  		<div class="tab{{if eq $i 0}} active{{end}}" onclick="switchTab({{$i}})">{{$t.Name}}</div>
+  		{{end}}
+	</div>
+  	<span class="time">{{.Now.Format "15:04"}}</span>
+  </div>
+
 {{range $i, $t := .Trips}}
 <div class="trip{{if eq $i 0}} active{{end}}" id="trip-{{$i}}">
-  {{range $t.Stops}}
-  <div class="stop-hdr">{{.StopName}}</div>
-  {{if not .Departures}}
-    <div class="empty">No departures in next 20 min</div>
+  {{if not $t.Departures}}
+    <div class="empty">No departures in next {{$.WindowMinutes}} min</div>
   {{else}}
-    {{range .Departures}}
+    {{range $t.Departures}}
     <div class="dep">
-      <div class="dep-row">
-        <div class="route">{{.RouteShortName}}</div>
-        <div class="info">
-          <div class="headsign">{{.Headsign}}</div>
-          <div class="sched">
-            Departs {{.DepartureTime}}{{if .IsDelayed}} <span class="delay">+{{.DelayMinutes}}m late</span>{{end}}
-          </div>
-        </div>
-        <div class="times">
-          <div class="lbl">departs</div>
-          <div class="depart{{if .IsRealtime}} rt{{end}}">{{.MinutesAway}}</div>
-          {{if .HasConnection}}
-          <div class="lbl">arrives</div>
-          <div class="arrive">{{.FinalArrivalTime}} ({{.FinalArrivalMins}})</div>
-          {{else}}
-          <div class="arrive no-conn">{{.FinalArrivalMins}}</div>
-          {{end}}
-        </div>
-      </div>
+    	<div class="dep-row">
+    		<div class="info">
+	        	<div class="headsign">{{.DepartureName}}</div>
+				<div class="route">{{.RouteShortName}}</div>
+				{{if .TransferName}}<div class="headsign">{{.TransferName}}</div>{{end}}
+				{{if .SecondLegRouteShort}}<div class="route">{{.SecondLegRouteShort}}</div>{{end}}
+				<div class="headsign">{{.ArrivalName}}</div>
+        	</div>
+        	<div class="times">
+          		<div class="lbl">Departs</div>
+          		<div class="depart{{if .IsRealtime}} rt{{end}}">
+		  			{{.MinutesAway}}
+		  		</div>
+		  		<div class="sched">
+					{{.DepartureTime}}{{if .IsDelayed}} <span class="delay">+{{.DelayMinutes}}m late</span>{{end}}
+          		</div>
+        	</div>
+        	<div class="times">
+          		<div class="lbl">Arrives</div>
+          		<div class="arrive">{{.FinalArrivalTime}}</div>
+        	</div>
+    	</div>
     </div>
     {{end}}
-  {{end}}
   {{end}}
 </div>
 {{end}}
