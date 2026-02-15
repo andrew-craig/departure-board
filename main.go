@@ -19,6 +19,7 @@ import (
 
 type Config struct {
 	GtfsAPIURL string       `yaml:"gtfs_api_url"`
+	Port       string       `yaml:"port"`
 	Trips      []TripConfig `yaml:"trips"`
 }
 
@@ -112,15 +113,19 @@ func init() {
 }
 
 func main() {
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "3000"
-	}
 	configPath := "config.yaml"
 
 	cfg, err := loadConfig(configPath)
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
+	}
+
+	port := cfg.Port
+	if port == "" {
+		port = os.Getenv("PORT")
+		if port == "" {
+			port = "3000"
+		}
 	}
 
 	apiURL := cfg.GtfsAPIURL

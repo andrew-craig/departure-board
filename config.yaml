@@ -7,22 +7,19 @@
 # Times (transfer_time, final_walk_time) are in seconds.
 
 # GTFS Departure Service API base URL
-gtfs_api_url: "http://localhost:8092"
+gtfs_api_url: "http://192.168.4.225:8074"
+port: "3002"
 
 trips:
   - name: "Home → Chippo"
     routes:
       - departure_stop_id: "206827"
         departure_name: "Middle Cove"
-        leg_1_services: 
-        - "207"
-        - "208"
-        - "209"
         transfer_arrival_stop_id: "2060116"
         transfer_time: 270
         transfer_departure_stop_id: "2060115"
         transfer_name: "Victoria Cross"
-        final_arrival_stop: "2060115"
+        final_arrival_stop: "2000467"
         final_walk_time: 720
         arrival_name: "Central"
       - departure_stop_id: "206827"
