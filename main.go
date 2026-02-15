@@ -80,9 +80,11 @@ type TripView struct {
 
 type DepartureView struct {
 	RouteShortName      string
+	RouteColor          string
 	Headsign            string
 	DepartureTime       string
 	MinutesAway         string
+	MinutesAwayLabel    string
 	IsRealtime          bool
 	IsDelayed           bool
 	DelayMinutes        int
@@ -90,7 +92,9 @@ type DepartureView struct {
 	FinalArrivalMins    string
 	HasConnection       bool
 	SecondLegRouteShort string
+	SecondLegRouteColor string
 	SecondLegHeadsign   string
+	TransferWaitMins    int
 	DepartureName       string
 	TransferName        string
 	ArrivalName         string
@@ -293,7 +297,9 @@ func calcTransferArrival(dv *DepartureView, d Departure, route RouteConfig, tran
 		dv.FinalArrivalMins = formatMinsAway(finalArr, now)
 		dv.finalArrivalSort = finalArr
 		dv.SecondLegRouteShort = connection.RouteShortName
+		dv.SecondLegRouteColor = routeColor(connection.RouteShortName)
 		dv.SecondLegHeadsign = connection.Headsign
+		dv.TransferWaitMins = int(connection.DepartureTime.Sub(arrTime).Minutes())
 	} else {
 		// Walk-only transfer: arrival at transfer stop + transfer walk + final walk
 		finalArr := arrTime.Add(time.Duration(route.TransferTime+route.FinalWalkTime) * time.Second)
@@ -324,11 +330,23 @@ func formatMinsAway(t time.Time, now time.Time) string {
 	mins := int(t.Sub(now).Minutes())
 	switch {
 	case mins <= 0:
-		return "Now"
+		return "0"
 	case mins == 1:
-		return "1 min"
+		return "1"
 	default:
-		return fmt.Sprintf("%d min", mins)
+		return fmt.Sprintf("%d", mins)
+	}
+}
+
+func formatMinsAwayLabel(t time.Time, now time.Time) string {
+	mins := int(t.Sub(now).Minutes())
+	switch {
+	case mins <= 0:
+		return "mins"
+	case mins == 1:
+		return "min"
+	default:
+		return "mins"
 	}
 }
 
@@ -356,6 +374,7 @@ func findArrival(d Departure, stopID string) *ArrivalDetail {
 }
 
 type ConnectionResult struct {
+	DepartureTime  time.Time
 	ArrivalTime    time.Time
 	RouteShortName string
 	Headsign       string
@@ -370,6 +389,7 @@ func findConnection(transferDepartures []Departure, earliestDept time.Time, fina
 		arr := findArrival(td, finalStopID)
 		if arr != nil {
 			return &ConnectionResult{
+				DepartureTime:  tdTime,
 				ArrivalTime:    effectiveArrival(*arr),
 				RouteShortName: td.RouteShortName,
 				Headsign:       td.Headsign,
@@ -391,6 +411,16 @@ func matchesServices(routeShortName string, allowed []string) bool {
 	return false
 }
 
+func routeColor(routeShortName string) string {
+	if strings.HasPrefix(routeShortName, "M") {
+		return "#168388"
+	}
+	if strings.HasPrefix(routeShortName, "L") {
+		return "#E4022D"
+	}
+	return "#009ED7"
+}
+
 func toDepartureView(d Departure, route RouteConfig, now time.Time) DepartureView {
 	depTime := d.ScheduledDeparture
 	isRealtime := false
@@ -407,16 +437,18 @@ func toDepartureView(d Departure, route RouteConfig, now time.Time) DepartureVie
 	}
 
 	return DepartureView{
-		RouteShortName: d.RouteShortName,
-		Headsign:       d.Headsign,
-		DepartureTime:  depTime.In(sydneyTZ).Format("15:04"),
-		MinutesAway:    formatMinsAway(depTime, now),
-		IsRealtime:     isRealtime,
-		IsDelayed:      isDelayed,
-		DelayMinutes:   delayMins,
-		DepartureName:  route.DepartureName,
-		TransferName:   route.TransferName,
-		ArrivalName:    route.ArrivalName,
+		RouteShortName:   d.RouteShortName,
+		RouteColor:       routeColor(d.RouteShortName),
+		Headsign:         d.Headsign,
+		DepartureTime:    depTime.In(sydneyTZ).Format("15:04"),
+		MinutesAway:      formatMinsAway(depTime, now),
+		MinutesAwayLabel: formatMinsAwayLabel(depTime, now),
+		IsRealtime:       isRealtime,
+		IsDelayed:        isDelayed,
+		DelayMinutes:     delayMins,
+		DepartureName:    route.DepartureName,
+		TransferName:     route.TransferName,
+		ArrivalName:      route.ArrivalName,
 	}
 }
 
@@ -461,37 +493,47 @@ var boardTemplate = strings.TrimSpace(`
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="refresh" content="30">
 <title>Departure Board</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,100..700;1,100..700&display=swap" rel="stylesheet">
 <style>
-:root{--accent-color: #115e59;--bg-color: #f0fdfa; --text-color: rgb(2, 24, 23)}
+:root{--accent-color: #ea580c;--bg-color: #fafafa;--header-bg-color: #e4e4e4; --text-color: #1a1a1a; --secondary-text-color: #555}
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg-color);color:var(--accent-color);min-height:100vh}
-.topbar{background:#16213e;padding-left:16px;padding-right:16px;display:flex;align-items:center;}
+body{font-family:"IBM Plex Sans",system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg-color);color:var(--text-color);min-height:100vh}
+.topbar{background:var(--header-bg-color);padding-left:16px;padding-right:16px;display:flex;align-items:center;}
 .hdr{justify-content:space-between;padding-top:16px;padding-bottom:16px}
 .hdr h1{font-size:16px;font-weight:600}
-.hdr .time{font-size:13px;opacity:.7}
+.hdr .time{font-size:13px;color:var(--secondary-text-color)}
 .tabs{gap:16px;justify-content:flex-start;overflow-x:auto;padding-top:0;padding-bottom:2px}
-.tab{padding:10px 0px;font-size:14px;font-weight:500;color:#aaa;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;white-space:nowrap;user-select:none}
-.tab.active{color:var(--accent-color);border-bottom-color:var(--accent-color)}
+.tab{padding:10px 0px;font-size:14px;font-weight:400;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;white-space:nowrap;user-select:none}
+.tab.active{font-weight:700;border-bottom-color:var(--accent-color)}
 .trip{display:none}
 .trip.active{display:block}
-.dep{border-bottom:1px solid rgba(255,255,255,.08)}
-.dep-row{display:flex;align-items:flex-start;padding:12px 16px;gap:12px}
-.route{background:#0f3460;color:#e94560;font-weight:700;font-size:14px;padding:4px 8px;border-radius:4px;min-width:44px;text-align:center;flex-shrink:0}
-.route.second{background:#0a2a4a;color:#4ecca3}
-.info{flex:1;display:flex;flex-direction:column;align-items:center;gap:8px;min-width:0}
+.dep{border-bottom:1px solid var(--header-bg-color)}
+.dep-row{display:flex;align-items:flex-start;padding:12px 16px;gap:16px}
+.route{color:var(--bg-color);font-weight:700;font-size:14px;padding:4px 8px;border-radius:4px;min-width:44px;text-align:center;flex-shrink:0}
+.info{flex-grow:3;flex-basis:70%;flex-shrink:1;display:flex;flex-direction:column;align-items:center;gap:8px;min-width:0}
 .info-top{display:flex;gap:8px;align-items:center;width:100%}
 .info-bottom{display:flex;gap:8px;align-items:center;width:100%}
 .route-details{font-size:13px;font-weight:400;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sched{font-size:12px;opacity:.6;margin-top:2px}
 .sched .delay{color:#ff6b6b;opacity:1}
-.times{text-align:right;flex-shrink:0,min-width:60px}
-.times .depart{font-size:18px;font-weight:700;color:#e94560}
-.times .depart.rt{color:#4ecca3}
-.times .arrive{font-size:18px;font-weight:700;color:#e94560}
-.times .arrive.no-conn{color:#ff6b6b}
-.times .lbl{font-size:10px;opacity:.5}
+.deptime{display:flex;flex-direction:row;align-items:center;gap:8px;width:50px;flex-shrink:0}
+.depindicator{width:8px;height:8px;border-radius:50%;background:var(--secondary-text-color)}
+.rt{background:#4ecca3}
+.delay{background:#ff6b6b}
+.mindep{display:flex;flex-direction:column;align-items:center}
+.minval{font-size:24px;font-weight:700}
+.minlabel{font-size:12px;color:var(--secondary-text-color)}
+.times{text-align:right;flex-grow:1;flex-basis:15%;flex-shrink:0;min-width:60px}
+.times .time{font-size:20px;font-weight:500}
+.times .lbl{font-size:12px;color:var(--secondary-text-color)}
+.transfer-wait{font-size:12px;color:var(--secondary-text-color);font-weight:500}
 .empty{padding:48px 16px;text-align:center;opacity:.5;font-size:14px}
 .err{padding:24px 16px;text-align:center;color:#ff6b6b;font-size:14px}
+@media (max-width: 540px) {
+	.departs{display:none}
+}
 </style>
 </head>
 <body>
@@ -521,10 +563,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
     {{range $t.Departures}}
     <div class="dep">
     	<div class="dep-row">
+			<div class="deptime">
+				<div class="depindicator{{if .IsRealtime}} rt{{end}} {{if .IsDelayed}} delay{{end}}"></div>
+				<div class="mindep">
+					<span class="minval">{{.MinutesAway}}</span>
+					<span class="minlabel">{{.MinutesAwayLabel}}</span>
+					</div>
+			</div>
     		<div class="info">
 				<div class="info-top">
-					<div class="route">{{.RouteShortName}}</div>
-					{{if .SecondLegRouteShort}}<div class="route">{{.SecondLegRouteShort}}</div>{{end}}
+					<div class="route" style="background:{{.RouteColor}}">{{.RouteShortName}}</div>
+					{{if .SecondLegRouteShort}}<span class="transfer-wait">{{.TransferWaitMins}}m</span><div class="route" style="background:{{.SecondLegRouteColor}}">{{.SecondLegRouteShort}}</div>{{end}}
 				</div>
 				<div class="info-bottom">
 	        		<div class="route-details">{{.DepartureName}} →
@@ -533,18 +582,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 					</div>
 				</div>
         	</div>
-        	<div class="times">
+        	<div class="times departs">
           		<div class="lbl">Departs</div>
-          		<div class="depart{{if .IsRealtime}} rt{{end}}">
-		  			{{.MinutesAway}}
-		  		</div>
-		  		<div class="sched">
-					{{.DepartureTime}}{{if .IsDelayed}} <span class="delay">+{{.DelayMinutes}}m late</span>{{end}}
-          		</div>
+		  		<div class="time">{{.DepartureTime}}</div>
         	</div>
         	<div class="times">
           		<div class="lbl">Arrives</div>
-          		<div class="arrive">{{.FinalArrivalTime}}</div>
+          		<div class="time">{{.FinalArrivalTime}}</div>
         	</div>
     	</div>
     </div>
