@@ -1,0 +1,60 @@
+# Predefined trips for the departure board.
+# Each trip appears as a tab on the page.
+#
+# Structure:
+#   trip > routes > [transfer] > final_arrival_stop
+#
+# Times (transfer_time, final_walk_time) are in seconds.
+
+# GTFS Departure Service API base URL
+gtfs_api_url: "http://localhost:8074"
+port: "3000"
+
+trips:
+  - name: "Home → Work"
+    routes:
+      - departure_stop_id: "2021102"
+        departure_name: "SCG"
+        transfer_arrival_stop_id: "2000448"
+        transfer_time: 270
+        transfer_departure_stop_id: "2000343"
+        transfer_name: "Central"
+        final_arrival_stop: "202092"
+        final_walk_time: 720
+        arrival_name: "Airport"
+      - departure_stop_id: "202150"
+        departure_name: "Light Brigade"
+        leg_1_services:
+        - "333"
+        transfer_arrival_stop_id: "200055"
+        transfer_name: "Museum"
+        transfer_time: 90
+        transfer_departure_stop_id: "2000372"
+        final_arrival_stop: "202092"
+        final_walk_time: 720
+        arrival_name: "Airport"
+
+
+  - name: "Work → Home"
+    routes:
+      - departure_stop_id: "202091"
+        departure_name: "Airport"
+        transfer_arrival_stop_id: "2000341"
+        transfer_time: 270
+        transfer_departure_stop_id: "2000447"
+        transfer_name: "Central"
+        final_arrival_stop: "2021101"
+        final_walk_time: 440
+        arrival_name: "Castle Crag"
+      - departure_stop_id: "202091"
+        departure_name: "Airport"
+        transfer_arrival_stop_id: "2000371"
+        transfer_time: 240
+        transfer_departure_stop_id: "220003203"
+        leg_2_services: 
+        - "333"
+        transfer_name: "Museum"
+        final_arrival_stop: "202511"
+        final_walk_time: 240
+        arrival_name: "Light Brigade"
+
